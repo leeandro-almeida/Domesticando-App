@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useAuth } from './src/contexts/AuthContext';
 import { FormData, SymptomLevel, ValidationErrors, Gender, Task, PhaseDetail, Medication, MedicationLog, CustomTask, RecurrenceConfig, TaskLog } from './types';
 import { Input } from './components/Input';
 import { Select } from './components/Select';
@@ -19,6 +20,7 @@ const INITIAL_DATA: FormData = {
   age: '',
   gender: '',
 };
+
 
 const SYMPTOMS: { id: SymptomLevel; label: string }[] = [
   { id: 'A', label: 'Leve / controlado' },
@@ -67,6 +69,8 @@ const ORDINALS = [
 ];
 
 export default function App() {
+  const { user } = useAuth();
+
   // --- STATE ---
   const [step, setStep] = useState<1 | 2 | 3>(1); // 1=Form, 2=Symptoms, 3=Tasks
   const [formData, setFormData] = useState<FormData>(INITIAL_DATA);
@@ -189,10 +193,6 @@ export default function App() {
     const newErrors: ValidationErrors = {};
     const isNameValid = formData.name.trim().length >= 2;
     if (!isNameValid && touched.name) newErrors.name = 'Mínimo 2 caracteres';
-    
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const isEmailValid = emailRegex.test(formData.email);
-    if (!isEmailValid && touched.email && formData.email.length > 0) newErrors.email = 'E-mail inválido';
 
     const ageNum = parseInt(formData.age, 10);
     const isAgeValid = !isNaN(ageNum) && ageNum >= 10 && ageNum <= 99;
@@ -200,7 +200,7 @@ export default function App() {
 
     const isGenderValid = !!formData.gender;
 
-    return { newErrors, isStep1Valid: isNameValid && isEmailValid && isAgeValid && isGenderValid, isStep2Valid: !!symptomLevel };
+    return { newErrors, isStep1Valid: isNameValid && isAgeValid && isGenderValid, isStep2Valid: !!symptomLevel };
   }, [formData, symptomLevel, touched]);
 
   useEffect(() => {
@@ -824,11 +824,11 @@ export default function App() {
             {step === 1 && (
               <div className="space-y-6">
                 <Input label="Nome" name="name" placeholder="Digite seu nome" value={formData.name} onChange={handleInputChange} onBlur={() => handleBlur('name')} error={errors.name} />
-                <Input label="E-mail" name="email" type="email" placeholder="seunome@email.com" value={formData.email} onChange={handleInputChange} onBlur={() => handleBlur('email')} error={errors.email} />
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   <Input label="Idade" name="age" type="number" placeholder="Ex: 28" value={formData.age} onChange={handleInputChange} onBlur={() => handleBlur('age')} error={errors.age} />
                   <Select label="Gênero" name="gender" options={Object.values(Gender)} value={formData.gender} onChange={handleInputChange} error={errors.gender} />
                 </div>
+                <p className="text-xs text-gray-500 text-center">{user?.email}</p>
               </div>
             )}
 
