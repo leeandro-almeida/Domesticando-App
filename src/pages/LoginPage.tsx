@@ -1,15 +1,14 @@
 import React, { useState } from 'react';
 import { Navigate } from 'react-router-dom';
-import { useAuth } from '../../contexts/AuthContext';
+import { useAuth } from '../contexts/AuthContext';
 
-type View = 'login' | 'register' | 'forgot';
+type View = 'login' | 'forgot';
 
 export default function LoginPage() {
-  const { user, isLoading, signIn, signUp, resetPassword } = useAuth();
+  const { user, isLoading, signIn, resetPassword } = useAuth();
   const [view, setView] = useState<View>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [name, setName] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -43,11 +42,6 @@ export default function LoginPage() {
       if (view === 'login') {
         const { error: err } = await signIn(email, password);
         if (err) setError(translateError(err.message));
-      } else if (view === 'register') {
-        if (password.length < 6) { setError('A senha deve ter no mínimo 6 caracteres.'); setSubmitting(false); return; }
-        const { error: err } = await signUp(email, password, name);
-        if (err) setError(translateError(err.message));
-        else setSuccess('Conta criada! Verifique seu e-mail para confirmar.');
       } else {
         const { error: err } = await resetPassword(email);
         if (err) setError(translateError(err.message));
@@ -62,13 +56,11 @@ export default function LoginPage() {
 
   const titles: Record<View, string> = {
     login: 'Entrar',
-    register: 'Criar conta',
     forgot: 'Recuperar senha',
   };
 
   const subtitles: Record<View, string> = {
     login: 'Acesse seu protocolo de tratamento',
-    register: 'Comece seu acompanhamento agora',
     forgot: 'Enviaremos um link para seu e-mail',
   };
 
@@ -97,21 +89,6 @@ export default function LoginPage() {
           <h2 className="text-lg font-semibold text-white mb-5">{titles[view]}</h2>
 
           <form onSubmit={handleSubmit} className="space-y-4">
-            {/* Name (register only) */}
-            {view === 'register' && (
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">Nome</label>
-                <input
-                  type="text"
-                  value={name}
-                  onChange={e => setName(e.target.value)}
-                  required
-                  placeholder="Seu nome"
-                  className="w-full h-12 px-4 rounded-xl bg-white/[0.04] border border-white/[0.08] text-white placeholder-gray-600 text-sm outline-none transition-all duration-200 focus:border-primary/50 focus:bg-white/[0.06] focus:ring-1 focus:ring-primary/20"
-                />
-              </div>
-            )}
-
             {/* Email */}
             <div className="space-y-1.5">
               <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">E-mail</label>
@@ -126,7 +103,7 @@ export default function LoginPage() {
             </div>
 
             {/* Password */}
-            {view !== 'forgot' && (
+            {view === 'login' && (
               <div className="space-y-1.5">
                 <label className="text-xs font-medium text-gray-400 uppercase tracking-wider">Senha</label>
                 <div className="relative">
@@ -187,7 +164,7 @@ export default function LoginPage() {
               {submitting ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin mx-auto" />
               ) : (
-                view === 'login' ? 'Entrar' : view === 'register' ? 'Criar conta' : 'Enviar link'
+                view === 'login' ? 'Entrar' : 'Enviar link'
               )}
             </button>
           </form>
@@ -195,22 +172,6 @@ export default function LoginPage() {
 
         {/* Footer links */}
         <div className="text-center mt-5">
-          {view === 'login' && (
-            <p className="text-sm text-gray-500">
-              Não tem conta?{' '}
-              <button onClick={() => switchView('register')} className="text-primary hover:text-blue-400 font-medium transition-colors">
-                Criar conta
-              </button>
-            </p>
-          )}
-          {view === 'register' && (
-            <p className="text-sm text-gray-500">
-              Já tem conta?{' '}
-              <button onClick={() => switchView('login')} className="text-primary hover:text-blue-400 font-medium transition-colors">
-                Entrar
-              </button>
-            </p>
-          )}
           {view === 'forgot' && (
             <p className="text-sm text-gray-500">
               Lembrou a senha?{' '}
@@ -228,7 +189,6 @@ export default function LoginPage() {
 function translateError(msg: string): string {
   if (msg.includes('Invalid login credentials')) return 'E-mail ou senha incorretos.';
   if (msg.includes('Email not confirmed')) return 'Confirme seu e-mail antes de entrar.';
-  if (msg.includes('User already registered')) return 'Esse e-mail já está cadastrado.';
   if (msg.includes('rate limit')) return 'Muitas tentativas. Aguarde um momento.';
   if (msg.includes('Password should be')) return 'A senha deve ter no mínimo 6 caracteres.';
   return msg;
