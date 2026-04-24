@@ -12,6 +12,17 @@ dist
 dist-ssr
 *.local
 
+# Environment — NUNCA commitar chaves reais
+.env
+.env.*
+!.env.example
+
+# Supabase temp files
+supabase/.temp/
+
+# Claude Code local settings
+.claude/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

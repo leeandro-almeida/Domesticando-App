@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useAuth } from './src/contexts/AuthContext';
-import { FormData, SymptomLevel, ValidationErrors, Gender, Task, PhaseDetail, Medication, MedicationLog, CustomTask, RecurrenceConfig, TaskLog } from './types';
+import { FormData, SymptomLevel, ValidationErrors, Gender, Task, PhaseDetail, Medication, MedicationLog, MedicationStatus, CustomTask, RecurrenceConfig, RecurrenceType, TaskLog } from './types';
+import { supabase } from './src/lib/supabase';
+import { TaskTemplate } from './src/types/admin';
 import { Input } from './components/Input';
 import { Select } from './components/Select';
 import { SymptomCard } from './components/SymptomCard';
@@ -56,10 +58,6 @@ const PHASE_DETAILS: Record<string, PhaseDetail> = {
   }
 };
 
-const GENERIC_TASKS: Task[] = [
-  { id: 'hygiene', text: 'Tomar banho e enxugar pênis com papel higiênico', completed: false },
-  { id: 'ointment_step1', text: 'Passar camada fina de pomada', completed: false },
-];
 
 const ORDINALS = [
     '', 'PRIMEIRO', 'SEGUNDO', 'TERCEIRO', 'QUARTO', 'QUINTO', 'SEXTO', 'SÉTIMO', 
@@ -86,11 +84,10 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   
+  const [isInitialized, setIsInitialized] = useState(false);
+
   // System Date Tracking (Simulated)
-  const [systemDate, setSystemDate] = useState<Date>(() => {
-    const saved = localStorage.getItem('domesticando_system_date');
-    return saved ? new Date(saved) : new Date();
-  });
+  const [systemDate, setSystemDate] = useState<Date>(new Date);
 
   // Settings
   const [timeBlockingEnabled, setTimeBlockingEnabled] = useState<boolean>(true);
@@ -103,6 +100,7 @@ export default function App() {
   
   // Custom Tasks
   const [customTasks, setCustomTasks] = useState<CustomTask[]>([]);
+  const [adminTemplateTasks, setAdminTemplateTasks] = useState<CustomTask[]>([]);
   const [taskLogs, setTaskLogs] = useState<TaskLog>({}); // Track custom task steps per day
   const [editingTask, setEditingTask] = useState<CustomTask | null>(null);
   const [taskToDelete, setTaskToDelete] = useState<string | null>(null);
@@ -125,68 +123,161 @@ export default function App() {
 
   // --- PERSISTENCE & INIT ---
 
+  // Load all user data from Supabase on mount
   useEffect(() => {
-    const savedDay = localStorage.getItem('domesticando_day');
-    if (savedDay) setCurrentDay(parseInt(savedDay, 10));
+    if (!user) return;
+    const userId = user.id;
 
-    const savedMeds = localStorage.getItem('domesticando_meds');
-    if (savedMeds) setMedications(JSON.parse(savedMeds));
+    const init = async () => {
+      const [
+        { data: progress },
+        { data: profile },
+        { data: meds },
+        { data: medLogs },
+        { data: userTasks },
+        { data: userTaskLogs },
+        { data: disabledTasks },
+      ] = await Promise.all([
+        supabase.from('user_progress').select('*').eq('user_id', userId).maybeSingle(),
+        supabase.from('profiles').select('*').eq('id', userId).maybeSingle(),
+        supabase.from('user_medications').select('*').eq('user_id', userId),
+        supabase.from('user_medication_logs').select('*').eq('user_id', userId),
+        supabase.from('user_tasks').select('*').eq('user_id', userId),
+        supabase.from('user_task_logs').select('*').eq('user_id', userId),
+        supabase.from('user_disabled_tasks').select('task_id').eq('user_id', userId),
+      ]);
 
-    const savedCustomTasks = localStorage.getItem('domesticando_custom_tasks');
-    if (savedCustomTasks) setCustomTasks(JSON.parse(savedCustomTasks));
+      if (progress) {
+        setCurrentPhase(progress.current_phase as SymptomLevel);
+        setCurrentDay(progress.current_day);
+        setSystemDate(new Date(progress.system_date + 'T12:00:00'));
+        setTimeBlockingEnabled(progress.time_blocking_enabled);
+        setStep(3);
+        setTaskView('list');
+      }
 
-    const savedDisabledSys = localStorage.getItem('domesticando_disabled_sys_tasks');
-    if (savedDisabledSys) setDisabledSystemTaskIds(JSON.parse(savedDisabledSys));
+      if (profile) {
+        setFormData({
+          name: profile.name || '',
+          email: profile.email || '',
+          age: profile.age?.toString() || '',
+          gender: profile.gender || '',
+        });
+        if (!progress && profile.onboarding_step) {
+          setStep(profile.onboarding_step as 1 | 2 | 3);
+        }
+      }
 
-    const savedLogs = localStorage.getItem('domesticando_logs');
-    if (savedLogs) setMedicationLogs(JSON.parse(savedLogs));
+      if (meds && meds.length > 0) {
+        setMedications(meds.map(m => ({
+          id: m.id,
+          name: m.name,
+          timesPerDay: m.times_per_day,
+          totalDosesPlanned: m.total_doses_planned,
+          dosesTaken: m.doses_taken,
+          status: m.status as MedicationStatus,
+          createdOnDay: m.created_on_day,
+          frequency: m.frequency as RecurrenceType,
+          weekDays: m.week_days || [],
+          monthDay: m.month_day ?? undefined,
+          createdDate: m.created_date ?? undefined,
+        })));
+      }
 
-    const savedTaskLogs = localStorage.getItem('domesticando_task_logs');
-    if (savedTaskLogs) setTaskLogs(JSON.parse(savedTaskLogs));
+      if (medLogs && medLogs.length > 0) {
+        const logsObj: MedicationLog = {};
+        medLogs.forEach((log: { log_date: string; medication_id: string; steps_completed: number; last_step_time: number }) => {
+          if (!logsObj[log.log_date]) logsObj[log.log_date] = {};
+          logsObj[log.log_date][log.medication_id] = {
+            stepsCompleted: log.steps_completed,
+            lastStepTime: log.last_step_time || 0,
+          };
+        });
+        setMedicationLogs(logsObj);
+      }
 
-    const savedPhase = localStorage.getItem('domesticando_phase');
-    if (savedPhase) setCurrentPhase(savedPhase as SymptomLevel);
-    
-    const savedTimeBlock = localStorage.getItem('domesticando_timeblock');
-    if (savedTimeBlock !== null) setTimeBlockingEnabled(savedTimeBlock === 'true');
-  }, []);
+      if (userTasks && userTasks.length > 0) {
+        setCustomTasks(userTasks.map(t => ({
+          id: t.id,
+          name: t.name,
+          hasSteps: t.has_steps,
+          stepsQty: t.steps_qty,
+          frequency: t.frequency as RecurrenceType,
+          weekDays: t.week_days || [],
+          monthDay: t.month_day ?? undefined,
+          createdDate: t.created_date ?? undefined,
+          createdAt: new Date(t.created_at).getTime(),
+        })));
+      }
 
+      if (userTaskLogs && userTaskLogs.length > 0) {
+        const logsObj: TaskLog = {};
+        userTaskLogs.forEach((log: { log_date: string; task_id: string; steps_completed: number }) => {
+          if (!logsObj[log.log_date]) logsObj[log.log_date] = {};
+          logsObj[log.log_date][log.task_id] = log.steps_completed;
+        });
+        setTaskLogs(logsObj);
+      }
+
+      if (disabledTasks && disabledTasks.length > 0) {
+        setDisabledSystemTaskIds(disabledTasks.map((t: { task_id: string }) => t.task_id));
+      }
+
+      setIsInitialized(true);
+    };
+
+    init();
+  }, [user]);
+
+  // Persist progress state to Supabase whenever it changes
   useEffect(() => {
-    localStorage.setItem('domesticando_day', currentDay.toString());
-  }, [currentDay]);
+    if (!user || !isInitialized || !currentPhase) return;
+    supabase.from('user_progress').upsert({
+      user_id: user.id,
+      current_phase: currentPhase,
+      current_day: currentDay,
+      system_date: systemDate.toISOString().split('T')[0],
+      time_blocking_enabled: timeBlockingEnabled,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: 'user_id' });
+  }, [currentPhase, currentDay, systemDate, timeBlockingEnabled, isInitialized, user]);
 
+  // Persist onboarding step and form data to profiles
   useEffect(() => {
-    localStorage.setItem('domesticando_meds', JSON.stringify(medications));
-  }, [medications]);
+    if (!user || !isInitialized) return;
+    supabase.from('profiles').update({
+      name: formData.name || null,
+      age: formData.age ? parseInt(formData.age, 10) : null,
+      gender: formData.gender || null,
+      onboarding_step: step,
+    }).eq('id', user.id);
+  }, [step, formData, isInitialized, user]);
 
+  // Fetch admin task templates whenever the phase changes
   useEffect(() => {
-    localStorage.setItem('domesticando_custom_tasks', JSON.stringify(customTasks));
-  }, [customTasks]);
-
-  useEffect(() => {
-    localStorage.setItem('domesticando_disabled_sys_tasks', JSON.stringify(disabledSystemTaskIds));
-  }, [disabledSystemTaskIds]);
-
-  useEffect(() => {
-    localStorage.setItem('domesticando_logs', JSON.stringify(medicationLogs));
-  }, [medicationLogs]);
-
-  useEffect(() => {
-    localStorage.setItem('domesticando_task_logs', JSON.stringify(taskLogs));
-  }, [taskLogs]);
-
-  useEffect(() => {
-    if (currentPhase) localStorage.setItem('domesticando_phase', currentPhase);
+    if (!currentPhase) return;
+    const today = new Date().toISOString().split('T')[0];
+    supabase
+      .from('task_templates')
+      .select('*')
+      .eq('grade', currentPhase)
+      .order('created_at')
+      .then(({ data }) => {
+        if (!data) return;
+        setAdminTemplateTasks(
+          (data as TaskTemplate[]).map(t => ({
+            id: t.id,
+            name: t.name,
+            hasSteps: t.has_steps,
+            stepsQty: t.steps_count ?? 1,
+            createdAt: new Date(t.created_at).getTime(),
+            frequency: (t.recurrence === 'today' ? 'once' : t.recurrence) as RecurrenceType,
+            weekDays: t.days_of_week,
+            createdDate: today,
+          }))
+        );
+      });
   }, [currentPhase]);
-  
-  useEffect(() => {
-    localStorage.setItem('domesticando_timeblock', String(timeBlockingEnabled));
-  }, [timeBlockingEnabled]);
-
-  // Persist System Date
-  useEffect(() => {
-    localStorage.setItem('domesticando_system_date', systemDate.toISOString());
-  }, [systemDate]);
 
   // --- VALIDATION LOGIC ---
   const validation = useMemo(() => {
@@ -262,35 +353,32 @@ export default function App() {
   // --- TASK GENERATION ---
 
   const generateTasksForDay = useCallback((
-    phase: SymptomLevel, 
-    day: number, 
-    currentTasksState: Task[],
+    _phase: SymptomLevel,
+    _day: number,
     dateOverride?: Date
   ) => {
     const dateToCheck = dateOverride || systemDate;
     const dateKey = getLogDateKey(dateToCheck);
 
-    // 1. Process System Tasks
-    const baseTasks = JSON.parse(JSON.stringify(GENERIC_TASKS)).filter((t: Task) => !disabledSystemTaskIds.includes(t.id));
-    
-    let mergedTasks: Task[] = baseTasks.map((t: Task) => {
-      let existing = currentTasksState.find(ct => ct.id === t.id);
-      
-      // Special Handling for Ointment
-      if (t.id === 'ointment_step1') {
-         const existingStep2 = currentTasksState.find(ct => ct.id === 'ointment_step2');
-         if (existingStep2) return existingStep2;
+    let mergedTasks: Task[] = [];
+
+    // 2a. Process Admin Template Tasks (from Supabase, by grade)
+    adminTemplateTasks.forEach(ct => {
+      if (!shouldItemAppearToday(ct, dateToCheck)) return;
+      const taskId = `tpl_${ct.id}`;
+      const stepsDone = taskLogs[dateKey]?.[taskId] || 0;
+      const totalSteps = ct.hasSteps ? ct.stepsQty : 1;
+      const isCompleted = stepsDone >= totalSteps;
+      let text = ct.name;
+      if (ct.hasSteps) {
+        text = isCompleted
+          ? `${ct.name} — ${totalSteps}/${totalSteps}`
+          : `${ct.name} — ${stepsDone + 1}/${totalSteps}`;
       }
-      
-      if (existing) return existing;
-      
-      if (t.id === 'ointment_step1') {
-          return { ...t, text: 'Passar camada fina de pomada — 1/2' };
-      }
-      return t;
+      mergedTasks.push({ id: taskId, text, completed: isCompleted });
     });
 
-    // 2. Process Custom Tasks (Multi-Step Logic)
+    // 2b. Process Custom Tasks (Multi-Step Logic)
     customTasks.forEach(ct => {
         if (!shouldItemAppearToday(ct, dateToCheck)) return;
         
@@ -419,17 +507,17 @@ export default function App() {
 
     const finalTasks = [...mergedTasks, ...medTasks];
     return finalTasks;
-  }, [medications, medicationLogs, customTasks, disabledSystemTaskIds, timeBlockingEnabled, shouldItemAppearToday, systemDate, taskLogs]);
+  }, [medications, medicationLogs, customTasks, adminTemplateTasks, disabledSystemTaskIds, timeBlockingEnabled, shouldItemAppearToday, systemDate, taskLogs]);
 
 
   // Effect to keep tasks updated
   useEffect(() => {
     if (taskView === 'list' && daySlideState === 'idle') {
-        setTasks(prev => generateTasksForDay(currentPhase, currentDay, prev));
+        setTasks(generateTasksForDay(currentPhase, currentDay));
 
         const interval = setInterval(() => {
-            setTasks(prev => generateTasksForDay(currentPhase, currentDay, prev));
-        }, 10000); 
+            setTasks(generateTasksForDay(currentPhase, currentDay));
+        }, 10000);
         
         return () => clearInterval(interval);
     }
@@ -468,77 +556,113 @@ export default function App() {
     }
   };
 
-  const saveMedication = (medData: Omit<Medication, 'id'>) => {
+  const saveMedication = async (medData: Omit<Medication, 'id'>) => {
+    if (!user) return;
     if (editingMedication) {
-        setMedications(prev => prev.map(m => 
-            m.id === editingMedication.id 
-                ? { ...m, ...medData, id: m.id } 
-                : m
+        await supabase.from('user_medications').update({
+          name: medData.name,
+          times_per_day: medData.timesPerDay,
+          total_doses_planned: medData.totalDosesPlanned,
+          doses_taken: medData.dosesTaken,
+          status: medData.status,
+          created_on_day: medData.createdOnDay,
+          frequency: medData.frequency,
+          week_days: medData.weekDays || [],
+          month_day: medData.monthDay ?? null,
+          created_date: medData.createdDate ?? null,
+          updated_at: new Date().toISOString(),
+        }).eq('id', editingMedication.id).eq('user_id', user.id);
+        setMedications((prev: Medication[]) => prev.map((m: Medication) =>
+          m.id === editingMedication.id ? { ...m, ...medData, id: m.id } : m
         ));
         setEditingMedication(null);
-        setTaskView('med_manage'); 
+        setTaskView('med_manage');
     } else {
-        const newMed: Medication = {
-          ...medData,
-          id: Date.now().toString(),
-        };
-        setMedications(prev => [...prev, newMed]);
-        
-        if (taskView === 'med_setup') {
-            setMedicationSetupStep('summary');
-        } else if (taskView === 'med_manage') {
-            setTaskView('med_manage');
-        } else {
-            setTaskView('list');
+        const { data } = await supabase.from('user_medications').insert({
+          user_id: user.id,
+          name: medData.name,
+          times_per_day: medData.timesPerDay,
+          total_doses_planned: medData.totalDosesPlanned,
+          doses_taken: 0,
+          status: medData.status || 'active',
+          created_on_day: medData.createdOnDay,
+          frequency: medData.frequency,
+          week_days: medData.weekDays || [],
+          month_day: medData.monthDay ?? null,
+          created_date: medData.createdDate ?? null,
+        }).select().single();
+        if (data) {
+          setMedications(prev => [...prev, { ...medData, id: data.id }]);
         }
+        if (taskView === 'med_setup') setMedicationSetupStep('summary');
+        else if (taskView === 'med_manage') setTaskView('med_manage');
+        else setTaskView('list');
     }
   };
 
-  const handleDeleteMedication = () => {
-    if (medicationToDelete) {
-        setMedications(prev => prev.filter(m => m.id !== medicationToDelete));
-        setMedicationToDelete(null);
-    }
+  const handleDeleteMedication = async () => {
+    if (!user || !medicationToDelete) return;
+    await supabase.from('user_medications').delete()
+      .eq('id', medicationToDelete).eq('user_id', user.id);
+    setMedications((prev: Medication[]) => prev.filter((m: Medication) => m.id !== medicationToDelete));
+    setMedicationToDelete(null);
   };
 
   // --- HANDLERS: CUSTOM TASKS ---
 
-  const saveCustomTask = (taskData: Omit<CustomTask, 'id' | 'createdAt'>) => {
-      if (editingTask) {
-          setCustomTasks(prev => prev.map(t => 
-             t.id === editingTask.id ? { ...t, ...taskData } : t
-          ));
-          setEditingTask(null);
-          setTaskView('edit_tasks');
-      } else {
-          const newTask: CustomTask = {
-              ...taskData,
-              id: Date.now().toString(),
-              createdAt: Date.now()
-          };
-          setCustomTasks(prev => [...prev, newTask]);
-          setTaskView('edit_tasks');
-      }
+  const saveCustomTask = async (taskData: Omit<CustomTask, 'id' | 'createdAt'>) => {
+    if (!user) return;
+    if (editingTask) {
+        await supabase.from('user_tasks').update({
+          name: taskData.name,
+          has_steps: taskData.hasSteps,
+          steps_qty: taskData.stepsQty,
+          frequency: taskData.frequency,
+          week_days: taskData.weekDays || [],
+          month_day: taskData.monthDay ?? null,
+          created_date: taskData.createdDate ?? null,
+          updated_at: new Date().toISOString(),
+        }).eq('id', editingTask.id).eq('user_id', user.id);
+        setCustomTasks((prev: CustomTask[]) => prev.map((t: CustomTask) =>
+          t.id === editingTask.id ? { ...t, ...taskData } : t
+        ));
+        setEditingTask(null);
+        setTaskView('edit_tasks');
+    } else {
+        const { data } = await supabase.from('user_tasks').insert({
+          user_id: user.id,
+          name: taskData.name,
+          has_steps: taskData.hasSteps,
+          steps_qty: taskData.stepsQty,
+          frequency: taskData.frequency,
+          week_days: taskData.weekDays || [],
+          month_day: taskData.monthDay ?? null,
+          created_date: taskData.createdDate ?? null,
+        }).select().single();
+        if (data) {
+          setCustomTasks(prev => [...prev, {
+            ...taskData,
+            id: data.id,
+            createdAt: new Date(data.created_at).getTime(),
+          }]);
+        }
+        setTaskView('edit_tasks');
+    }
   };
 
-  const handleDeleteCustomTask = () => {
-      if (taskToDelete) {
-          // If it's a generic system task
-          if (GENERIC_TASKS.some(g => g.id === taskToDelete)) {
-             setDisabledSystemTaskIds(prev => [...prev, taskToDelete]);
-          } else {
-             // It's a custom task
-             setCustomTasks(prev => prev.filter(t => t.id !== taskToDelete));
-          }
-          setTaskToDelete(null);
-      }
+  const handleDeleteCustomTask = async () => {
+    if (!user || !taskToDelete) return;
+    await supabase.from('user_tasks').delete()
+      .eq('id', taskToDelete).eq('user_id', user.id);
+    setCustomTasks((prev: CustomTask[]) => prev.filter((t: CustomTask) => t.id !== taskToDelete));
+    setTaskToDelete(null);
   };
 
 
   const startTasksFlow = () => {
     setCurrentDay(1);
     setTaskView('list');
-    setTasks(generateTasksForDay(currentPhase, 1, []));
+    setTasks(generateTasksForDay(currentPhase, 1));
   };
 
   // --- DAY ADVANCE ANIMATION & LOGIC ---
@@ -556,7 +680,7 @@ export default function App() {
       setSystemDate(nextDate);
 
       // 3. Generate fresh tasks for the new date
-      const freshTasks = generateTasksForDay(currentPhase, newDay, [], nextDate);
+      const freshTasks = generateTasksForDay(currentPhase, newDay, nextDate);
       setTasks(freshTasks);
       
       setFeedbackMessage(`Dia ${newDay} iniciado`);
@@ -569,98 +693,99 @@ export default function App() {
   };
 
   const handleToggleTask = (id: string) => {
+    if (!user) return;
     let newTasks = [...tasks];
     const dateKey = getLogDateKey(systemDate);
-    
+
     // --- MEDICATION LOGIC ---
     if (id.startsWith('med_')) {
         const medId = id.replace('med_', '');
         const med = medications.find(m => m.id === medId);
-        
+
         if (med) {
              const currentLog = medicationLogs[dateKey]?.[medId] || { stepsCompleted: 0, lastStepTime: 0 };
-             
-             // GUARD: Strictly prevent clicking if daily limit reached
-             if (currentLog.stepsCompleted >= med.timesPerDay) {
-                 return; // Do nothing
-             }
-             
-             // GUARD: Strictly prevent clicking if total treatment limit reached
-             if (med.dosesTaken >= med.totalDosesPlanned) {
-                 return; // Do nothing
-             }
-             
-             // GUARD: Check Time Lock if enabled
+
+             if (currentLog.stepsCompleted >= med.timesPerDay) return;
+             if (med.dosesTaken >= med.totalDosesPlanned) return;
+
              if (timeBlockingEnabled && currentLog.stepsCompleted > 0) {
-                 const intervalHours = 24 / med.timesPerDay;
-                 const intervalMs = intervalHours * 60 * 60 * 1000;
-                 const nextTime = currentLog.lastStepTime + intervalMs;
-                 if (Date.now() < nextTime) {
-                     return; // Locked
-                 }
+                 const intervalMs = (24 / med.timesPerDay) * 60 * 60 * 1000;
+                 if (Date.now() < currentLog.lastStepTime + intervalMs) return;
              }
 
              const newStepsCompleted = currentLog.stepsCompleted + 1;
-             
-             // Update Daily Log
-             const updatedLog = {
-                 ...medicationLogs,
-                 [dateKey]: {
-                     ...medicationLogs[dateKey],
-                     [medId]: {
-                         stepsCompleted: newStepsCompleted,
-                         lastStepTime: Date.now()
-                     }
-                 }
-             };
-             setMedicationLogs(updatedLog);
+             const lastStepTime = Date.now();
 
-             // Update Global Medication State (Treatment Tracking)
+             setMedicationLogs({
+               ...medicationLogs,
+               [dateKey]: {
+                 ...medicationLogs[dateKey],
+                 [medId]: { stepsCompleted: newStepsCompleted, lastStepTime },
+               },
+             });
+
              const newTotalTaken = med.dosesTaken + 1;
              const isTreatmentFinished = newTotalTaken >= med.totalDosesPlanned;
-             
-             const updatedMeds = medications.map(m => {
-                 if (m.id === medId) {
-                     return {
-                         ...m,
-                         dosesTaken: newTotalTaken,
-                         status: isTreatmentFinished ? 'completed' : m.status
-                     } as Medication;
-                 }
-                 return m;
-             });
-             setMedications(updatedMeds);
+             setMedications(medications.map((m: Medication) =>
+               m.id === medId
+                 ? { ...m, dosesTaken: newTotalTaken, status: (isTreatmentFinished ? 'completed' : m.status) as MedicationStatus }
+                 : m
+             ));
+
+             supabase.from('user_medication_logs').upsert({
+               user_id: user.id, medication_id: medId, log_date: dateKey,
+               steps_completed: newStepsCompleted, last_step_time: lastStepTime,
+               updated_at: new Date().toISOString(),
+             }, { onConflict: 'user_id,medication_id,log_date' });
+             supabase.from('user_medications').update({
+               doses_taken: newTotalTaken,
+               status: isTreatmentFinished ? 'completed' : med.status,
+               updated_at: new Date().toISOString(),
+             }).eq('id', medId).eq('user_id', user.id);
         }
-    } 
+    }
     // --- CUSTOM TASK LOGIC (Multi-step) ---
     else if (id.startsWith('custom_')) {
         const ctId = id.replace('custom_', '');
         const ct = customTasks.find(t => t.id === ctId);
-        
+
         if (ct) {
             const currentStep = taskLogs[dateKey]?.[ctId] || 0;
             const totalSteps = ct.hasSteps ? ct.stepsQty : 1;
-            
+
             if (currentStep < totalSteps) {
-                // Increment Step
                 const newStep = currentStep + 1;
-                const updatedTaskLogs = {
-                    ...taskLogs,
-                    [dateKey]: {
-                        ...taskLogs[dateKey],
-                        [ctId]: newStep
-                    }
-                };
-                setTaskLogs(updatedTaskLogs);
-                
-                // Note: The UI update happens reactively via `generateTasksForDay` in the effect
-                // But for instant feedback, we can temporarily toggle 'completed' if maxed out
+                setTaskLogs({ ...taskLogs, [dateKey]: { ...taskLogs[dateKey], [ctId]: newStep } });
                 if (newStep >= totalSteps) {
                    newTasks = newTasks.map(t => t.id === id ? { ...t, completed: true } : t);
                    setTasks(newTasks);
                 }
+                supabase.from('user_task_logs').upsert({
+                  user_id: user.id, task_id: ctId, log_date: dateKey,
+                  steps_completed: newStep, updated_at: new Date().toISOString(),
+                }, { onConflict: 'user_id,task_id,log_date' });
             }
         }
+    }
+    // --- ADMIN TEMPLATE TASK LOGIC ---
+    else if (id.startsWith('tpl_')) {
+      const ct = adminTemplateTasks.find(t => `tpl_${t.id}` === id);
+      if (ct) {
+        const currentStep = taskLogs[dateKey]?.[id] || 0;
+        const totalSteps = ct.hasSteps ? ct.stepsQty : 1;
+        if (currentStep < totalSteps) {
+          const newStep = currentStep + 1;
+          setTaskLogs({ ...taskLogs, [dateKey]: { ...taskLogs[dateKey], [id]: newStep } });
+          if (newStep >= totalSteps) {
+            newTasks = newTasks.map(t => t.id === id ? { ...t, completed: true } : t);
+            setTasks(newTasks);
+          }
+          supabase.from('user_task_logs').upsert({
+            user_id: user.id, task_id: id, log_date: dateKey,
+            steps_completed: newStep, updated_at: new Date().toISOString(),
+          }, { onConflict: 'user_id,task_id,log_date' });
+        }
+      }
     }
     // --- OINTMENT LOGIC (System) ---
     else if (id === 'ointment_step1') {
@@ -709,7 +834,7 @@ export default function App() {
     setFormData(INITIAL_DATA);
     setSymptomLevel(null);
     setTasks([]);
-    setStep(1); 
+    setStep(1);
     setCurrentPhase('D');
     setCurrentDay(1);
     setTaskView('list');
@@ -720,10 +845,21 @@ export default function App() {
     setTaskLogs({});
     setDisabledSystemTaskIds([]);
     setTimeBlockingEnabled(true);
-    localStorage.clear();
-    // Clear simulated date to force reset to real today
-    localStorage.removeItem('domesticando_system_date');
     setSystemDate(new Date());
+
+    if (user) {
+      Promise.all([
+        supabase.from('user_progress').delete().eq('user_id', user.id),
+        supabase.from('user_medications').delete().eq('user_id', user.id),
+        supabase.from('user_tasks').delete().eq('user_id', user.id),
+        supabase.from('user_task_logs').delete().eq('user_id', user.id),
+        supabase.from('user_medication_logs').delete().eq('user_id', user.id),
+        supabase.from('user_disabled_tasks').delete().eq('user_id', user.id),
+        supabase.from('profiles').update({
+          age: null, gender: null, onboarding_step: 1,
+        }).eq('id', user.id),
+      ]);
+    }
   };
 
   // --- PHASE / NAV LOGIC ---
@@ -752,7 +888,7 @@ export default function App() {
       if (next) {
         setCurrentPhase(next);
         setCurrentDay(1);
-        setTasks(generateTasksForDay(next, 1, []));
+        setTasks(generateTasksForDay(next, 1));
         setTaskView('list');
       }
     } else {
@@ -776,7 +912,7 @@ export default function App() {
     if (selectedPhaseToChange && selectedPhaseToChange !== currentPhase) {
       setCurrentPhase(selectedPhaseToChange);
       setCurrentDay(1);
-      setTasks(generateTasksForDay(selectedPhaseToChange, 1, []));
+      setTasks(generateTasksForDay(selectedPhaseToChange, 1));
     }
     setTaskView('list');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -789,6 +925,14 @@ export default function App() {
   // --------------------------------------------------------------------------
   // RENDER
   // --------------------------------------------------------------------------
+
+  if (!isInitialized) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-[#0a0a0c]">
+        <div className="w-8 h-8 border-2 border-white/20 border-t-white/80 rounded-full animate-spin" />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center p-4 bg-gradient-to-br from-background via-[#0a0a0c] to-[#111115] relative overflow-x-hidden">
@@ -928,7 +1072,7 @@ export default function App() {
       {step === 3 && taskView === 'edit_tasks' && (
           <TaskManager 
             customTasks={customTasks}
-            systemTasks={GENERIC_TASKS.map(t => ({ id: t.id, text: t.text, recurrence: 'Diário' }))}
+            systemTasks={[]}
             disabledSystemTaskIds={disabledSystemTaskIds}
             onToggleSystemTask={(id) => {
                  setTaskToDelete(id);
