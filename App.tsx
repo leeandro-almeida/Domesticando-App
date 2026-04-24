@@ -232,25 +232,25 @@ export default function App() {
   // Persist progress state to Supabase whenever it changes
   useEffect(() => {
     if (!user || !isInitialized || !currentPhase) return;
-    supabase.from('user_progress').upsert({
+    void supabase.from('user_progress').upsert({
       user_id: user.id,
       current_phase: currentPhase,
       current_day: currentDay,
       system_date: systemDate.toISOString().split('T')[0],
       time_blocking_enabled: timeBlockingEnabled,
       updated_at: new Date().toISOString(),
-    }, { onConflict: 'user_id' });
+    }, { onConflict: 'user_id' }).then();
   }, [currentPhase, currentDay, systemDate, timeBlockingEnabled, isInitialized, user]);
 
   // Persist onboarding step and form data to profiles
   useEffect(() => {
     if (!user || !isInitialized) return;
-    supabase.from('profiles').update({
+    void supabase.from('profiles').update({
       name: formData.name || null,
       age: formData.age ? parseInt(formData.age, 10) : null,
       gender: formData.gender || null,
       onboarding_step: step,
-    }).eq('id', user.id);
+    }).eq('id', user.id).then();
   }, [step, formData, isInitialized, user]);
 
   // Fetch admin task templates whenever the phase changes
@@ -732,16 +732,16 @@ export default function App() {
                  : m
              ));
 
-             supabase.from('user_medication_logs').upsert({
+             void supabase.from('user_medication_logs').upsert({
                user_id: user.id, medication_id: medId, log_date: dateKey,
                steps_completed: newStepsCompleted, last_step_time: lastStepTime,
                updated_at: new Date().toISOString(),
-             }, { onConflict: 'user_id,medication_id,log_date' });
-             supabase.from('user_medications').update({
+             }, { onConflict: 'user_id,medication_id,log_date' }).then();
+             void supabase.from('user_medications').update({
                doses_taken: newTotalTaken,
                status: isTreatmentFinished ? 'completed' : med.status,
                updated_at: new Date().toISOString(),
-             }).eq('id', medId).eq('user_id', user.id);
+             }).eq('id', medId).eq('user_id', user.id).then();
         }
     }
     // --- CUSTOM TASK LOGIC (Multi-step) ---
@@ -760,10 +760,10 @@ export default function App() {
                    newTasks = newTasks.map(t => t.id === id ? { ...t, completed: true } : t);
                    setTasks(newTasks);
                 }
-                supabase.from('user_task_logs').upsert({
+                void supabase.from('user_task_logs').upsert({
                   user_id: user.id, task_id: ctId, log_date: dateKey,
                   steps_completed: newStep, updated_at: new Date().toISOString(),
-                }, { onConflict: 'user_id,task_id,log_date' });
+                }, { onConflict: 'user_id,task_id,log_date' }).then();
             }
         }
     }
@@ -780,10 +780,10 @@ export default function App() {
             newTasks = newTasks.map(t => t.id === id ? { ...t, completed: true } : t);
             setTasks(newTasks);
           }
-          supabase.from('user_task_logs').upsert({
+          void supabase.from('user_task_logs').upsert({
             user_id: user.id, task_id: id, log_date: dateKey,
             steps_completed: newStep, updated_at: new Date().toISOString(),
-          }, { onConflict: 'user_id,task_id,log_date' });
+          }, { onConflict: 'user_id,task_id,log_date' }).then();
         }
       }
     }
